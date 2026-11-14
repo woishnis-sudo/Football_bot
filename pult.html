@@ -1,0 +1,190 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Робот-футболист</title>
+<style>
+*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+body{margin:0;background:#111;color:#eee;font-family:sans-serif;overscroll-behavior:none}
+header{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:#1c1c1c;gap:8px}
+#hr{display:flex;align-items:center;gap:8px;font-size:13px}
+#st{font-size:13px;padding:4px 10px;border-radius:10px;white-space:nowrap}
+.ok{background:#1b5e20}.bad{background:#7f1d1d}.demo{background:#8a6d00}
+#gear{background:none;border:none;color:#eee;font-size:24px;padding:0 4px}
+#sen{display:inline-block;width:12px;height:12px;border-radius:50%;background:#444}
+#sen.on{background:#4caf50;box-shadow:0 0 8px #4caf50}
+#pad{display:flex;flex-wrap:wrap;justify-content:space-around;align-items:center;gap:20px;padding:16px}
+#joywrap{text-align:center}
+#joy{position:relative;width:240px;height:240px;border-radius:50%;background:radial-gradient(#333,#1a1a1a);border:3px solid #444;touch-action:none}
+#knob{position:absolute;left:50%;top:50%;width:90px;height:90px;border-radius:50%;background:#2196f3;transform:translate(-50%,-50%);box-shadow:0 0 15px #2196f3aa;pointer-events:none}
+#motors{margin-top:8px;font-size:13px;color:#aaa;font-family:monospace;min-height:1em}
+#kick{width:170px;height:170px;border-radius:50%;border:none;font-size:26px;font-weight:bold;color:#fff;touch-action:none;transition:background .2s,box-shadow .2s}
+#kick.ready{background:#2e7d32;box-shadow:0 0 25px #4caf50}
+#kick.ready:active,#kick.warn:active{transform:scale(.95)}
+#kick.busy{background:#c62828;box-shadow:0 0 25px #f44336}
+#kick.warn{background:#e65100;box-shadow:0 0 25px #ff9800}
+#kick small{display:block;font-size:14px;font-weight:normal;margin-top:4px}
+#cfg{background:#1c1c1c;margin:0 12px 12px;padding:10px 12px;border-radius:12px}
+#cfg label,#cfg div{display:block;margin:8px 0}
+input[type=number],input[type=text]{width:140px;font-size:18px;padding:4px;background:#000;color:#fff;border:1px solid #555;border-radius:6px;-webkit-user-select:text;user-select:text}
+input[type=number]{width:100px}
+input[type=range]{width:200px;vertical-align:middle}
+.btn{font-size:16px;padding:6px 14px;margin-left:8px;border-radius:6px;border:none;background:#2196f3;color:#fff}
+#log{margin:0 12px 12px;font-size:12px;color:#777;font-family:monospace}
+@media (max-height:500px){
+  #joy{width:200px;height:200px}
+  #kick{width:150px;height:150px}
+  #pad{padding:8px}
+}
+</style></head><body>
+<header>
+  <b>⚽ Робот-футболист</b>
+  <div id="hr">
+    <span id="sen"></span><span id="sentxt">—</span>
+    <span id="st" class="bad">Подключение…</span>
+    <button id="gear">⚙</button>
+  </div>
+</header>
+<div id="pad">
+  <div id="joywrap">
+    <div id="joy"><div id="knob"></div></div>
+    <div id="motors"></div>
+  </div>
+  <button id="kick" class="busy" disabled><span id="klbl">УДАР</span><small id="kinfo">нет связи</small></button>
+</div>
+<div id="cfg" hidden>
+  <div id="hostrow" hidden>Адрес робота:
+    <input type="text" id="host" value="192.168.4.1">
+    <button class="btn" id="conn">Подключить</button></div>
+  <label>Макс. время взвода (защита), мс:
+    <input type="number" id="kt" min="300" max="10000" step="100" value="3000">
+    <button class="btn" id="save">Сохранить</button></label>
+  <label>Скорость: <input type="range" id="sp" min="20" max="100" value="100"> <span id="spv">100</span>%</label>
+</div>
+<div id="log"></div>
+<script>
+const $=id=>document.getElementById(id);
+// APP  — страница внутри APK (есть мост window.Android)
+// DEMO — файл открыт с диска в обычном браузере
+const APP=typeof window.Android!=='undefined';
+const DEMO=!APP&&(location.protocol==='file:'||!location.hostname);
+let ws,gen=0,kstate=-1,tmr=null;
+
+function host(){return APP?(localStorage.getItem('host')||'192.168.4.1'):location.hostname;}
+function st(t,c){$('st').textContent=t;$('st').className=c;}
+
+// ---- Кнопка удара: 0 готов, 1 взвод, 2 ошибка, -1 нет связи ----
+function setKick(k,e){
+  const b=$('kick'),l=$('klbl'),i=$('kinfo');
+  if(k===kstate&&k!==2)return;
+  kstate=k;clearInterval(tmr);
+  if(k===0){b.className='ready';b.disabled=false;l.textContent='УДАР';i.textContent='готов';}
+  else if(k===1){b.className='busy';b.disabled=true;l.textContent='УДАР';
+    const t0=Date.now(),u=()=>i.textContent='взвод '+((Date.now()-t0)/1000).toFixed(1)+' с';
+    u();tmr=setInterval(u,100);}
+  else if(k===2){b.className='warn';b.disabled=false;l.textContent='ВЗВЕСТИ';
+    i.textContent=e===1?'датчик не сработал':'шестерня сдвинута';}
+  else{b.className='busy';b.disabled=true;l.textContent='УДАР';i.textContent='нет связи';}
+}
+
+function onState(d){
+  if(document.activeElement!==$('kt'))$('kt').value=d.t;
+  $('sp').value=d.s;$('spv').textContent=d.s;
+  $('sen').className=d.sen?'on':'';
+  $('sentxt').textContent=d.sen?'взведено':'метки нет';
+  setKick(d.k,d.e);
+}
+
+// ---- Демо-режим ----
+const sim={t:3000,s:100,k:0,e:0,sen:1};
+const push=()=>onState({...sim});
+function simHandle(m){
+  $('log').textContent='→ отправлено: '+m;
+  if(m[0]==='J'){
+    let [x,y]=m.slice(2).split(',').map(Number);
+    if(Math.abs(x)<8)x=0;if(Math.abs(y)<8)y=0;
+    let fx=x*0.7,l=y+fx,r=y-fx,mx=Math.max(Math.abs(l),Math.abs(r));
+    if(mx>100){l=l*100/mx;r=r*100/mx;}
+    $('motors').textContent='Л: '+Math.round(l*sim.s/100)+'%  П: '+Math.round(r*sim.s/100)+'%';
+  }else if(m==='K'){
+    if(sim.k===1)return;
+    sim.k=1;sim.e=0;push();
+    setTimeout(()=>{sim.sen=0;push();},150);
+    const turn=1200;
+    if(sim.t<turn)setTimeout(()=>{sim.k=2;sim.e=1;push();},sim.t);
+    else setTimeout(()=>{sim.sen=1;sim.k=0;push();},turn);
+  }else if(m[0]==='T'){sim.t=Math.min(10000,Math.max(300,parseInt(m.slice(2))));push();}
+  else if(m[0]==='S'){sim.s=Math.min(100,Math.max(20,parseInt(m.slice(2))));push();}
+}
+
+// ---- Связь ----
+function connect(){
+  if(DEMO){st('ДЕМО (без робота)','demo');push();return;}
+  if(APP){try{Android.bindWifi();}catch(e){}}
+  const my=++gen;
+  st('Подключение…','demo');
+  const s=new WebSocket('ws://'+host()+':81/');
+  ws=s;
+  const to=setTimeout(()=>{if(s.readyState===0)s.close();},3000);
+  s.onopen=()=>{clearTimeout(to);if(my===gen)st('Подключено','ok');};
+  s.onclose=()=>{clearTimeout(to);if(my!==gen)return;
+    st('Нет связи…','bad');setKick(-1);
+    setTimeout(()=>{if(my===gen)connect();},1000);};
+  s.onmessage=e=>{if(my!==gen)return;try{onState(JSON.parse(e.data));}catch(x){}};
+}
+function send(m){if(DEMO){simHandle(m);return;}if(ws&&ws.readyState===1)ws.send(m);}
+
+// ---- Панель настроек ----
+$('gear').onclick=()=>{$('cfg').hidden=!$('cfg').hidden;};
+if(APP){
+  $('hostrow').hidden=false;
+  $('host').value=host();
+  if(!localStorage.getItem('host'))$('cfg').hidden=false;   // первый запуск
+  $('conn').onclick=()=>{
+    localStorage.setItem('host',$('host').value.trim()||'192.168.4.1');
+    $('host').value=host();$('host').blur();
+    try{if(ws)ws.close();}catch(e){}
+    connect();
+  };
+}
+$('save').onclick=()=>{
+  let v=parseInt($('kt').value);if(isNaN(v))return;
+  v=Math.min(10000,Math.max(300,v));$('kt').value=v;
+  send('T:'+v);$('kt').blur();
+};
+$('sp').oninput=()=>$('spv').textContent=$('sp').value;
+$('sp').onchange=()=>send('S:'+$('sp').value);
+
+// ---- Кнопка удара ----
+$('kick').addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  if(kstate!==0&&kstate!==2)return;
+  if(APP){try{Android.vibrate(40);}catch(x){}}
+  send('K');setKick(1);
+});
+
+// ---- Джойстик ----
+const base=$('joy'),knob=$('knob');
+let jx=0,jy=0,active=false,pid=null;
+function move(e){
+  const r=base.getBoundingClientRect(),R=r.width/2,m=R-35;
+  let dx=e.clientX-r.left-R,dy=e.clientY-r.top-R;
+  const d=Math.hypot(dx,dy);
+  if(d>m){dx=dx*m/d;dy=dy*m/d;}
+  knob.style.transform=`translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;
+  jx=Math.round(dx/m*100);jy=Math.round(-dy/m*100);
+}
+function release(){
+  active=false;pid=null;jx=jy=0;
+  knob.style.transform='translate(-50%,-50%)';
+  send('J:0,0');
+}
+base.addEventListener('pointerdown',e=>{if(active)return;active=true;pid=e.pointerId;base.setPointerCapture(pid);move(e);});
+base.addEventListener('pointermove',e=>{if(active&&e.pointerId===pid)move(e);});
+['pointerup','pointercancel'].forEach(ev=>base.addEventListener(ev,e=>{if(e.pointerId===pid)release();}));
+setInterval(()=>{if(active)send('J:'+jx+','+jy);},50);
+
+// Свернули приложение — стоп
+document.addEventListener('visibilitychange',()=>{if(document.hidden)release();});
+
+connect();
+</script></body></html>
